@@ -15,19 +15,14 @@ import torch.optim as optim_torch
 import torch.nn.functional as F
 import torch.optim.lr_scheduler as lr_scheduler
 
-# 从 models.py 和 data.py 导入必要的组件
+# Import necessary components from models.py and data.py
 from models import TransformerTorch
 from data import grokking_data_torch
 
 
-# ==============================================================================
-# 以下是 TorchTrainer 类和 run_single_experiment 函数的复制
-# 它们与 main.py 中的定义完全相同，以确保 MXmain.py 的独立性
-# ==============================================================================
-
 class TorchTrainer:
     """
-    A parallel trainer that replicates the MLX training flow using PyTorch.
+    A trainer that handles the edge case of empty test sets.
     """
 
     def __init__(self,
@@ -63,6 +58,9 @@ class TorchTrainer:
         Xtest_t, Ttest_t = val_data
 
         global_step = 0
+
+        # Check if validation set is empty
+        has_validation = Xtest_t.shape[0] > 0
 
         # Basic epoch loop
         epoch_bar = tqdm(range(epochs), desc='Training', unit='epoch', leave=False)
@@ -103,8 +101,13 @@ class TorchTrainer:
             self.train_error_trace.append(avg_train_loss)
             self.train_acc_trace.append(avg_train_acc)
 
-            # Evaluate
-            avg_val_loss, avg_val_acc = self.evaluate((Xtest_t, Ttest_t))
+            # Evaluate on validation set if it exists
+            if has_validation:
+                avg_val_loss, avg_val_acc = self.evaluate((Xtest_t, Ttest_t))
+            else:
+                # Use training metrics as validation when no test set
+                avg_val_loss, avg_val_acc = avg_train_loss, avg_train_acc
+                
             self.val_error_trace.append(avg_val_loss)
             self.val_acc_trace.append(avg_val_acc)
 
@@ -114,11 +117,20 @@ class TorchTrainer:
                 'val_loss': f'{avg_val_loss:.3f}',
                 'val_acc': f'{avg_val_acc:.3f}',
             }
+            if not has_validation:
+                postfix['note'] = 'val=train'
             epoch_bar.set_postfix(postfix)
-
+# Quick fix - replace the evaluate method in your existing file
+# Find this method in your Train Frasction_Plot.py file and replace it:
+    
     def evaluate(self, test_data):
-        self.model.eval()
         Xtest_t, Ttest_t = test_data
+        
+        # Handle empty test set - THIS IS THE FIX
+        if Xtest_t.shape[0] == 0:
+            return 0.0, 0.0
+            
+        self.model.eval()
         total_loss, total_correct = 0.0, 0
         with torch.no_grad():
             for Xb, Tb in self._make_batches(Xtest_t, Ttest_t):
@@ -130,6 +142,8 @@ class TorchTrainer:
                 if self.classification:
                     preds = torch.argmax(outputs, dim=1)
                     total_correct += (preds == Tb).sum().item()
+        if Xtest_t.shape[0] == 0:
+            return 0.0, 0.0         
         avg_loss = total_loss / Xtest_t.shape[0]
         if self.classification:
             avg_acc = total_correct / Xtest_t.shape[0]
@@ -137,6 +151,13 @@ class TorchTrainer:
             avg_acc = 0.0
         return avg_loss, avg_acc
 
+# Also change this line:
+# train_fractions_to_test = np.linspace(0.1, 1.0, 10)
+# TO:
+# train_fractions_to_test = np.linspace(0.1, 0.95, 10)
+
+# And fix the n_tokens parameter:
+# Change 'n_tokens': p + 2, to 'n_tokens': p + 6,
 
 def run_single_experiment(p, op, train_fraction, depth, dim, heads, dropout, lr, weight_decay, beta1, beta2, warmup,
                           batch_size, epochs, seed, cpu_only):
@@ -154,7 +175,7 @@ def run_single_experiment(p, op, train_fraction, depth, dim, heads, dropout, lr,
         'depth': depth,
         'dim': dim,
         'heads': heads,
-        'n_tokens': p + 2,
+        'n_tokens': p + 6,  # Fixed: should be p + 6, not p + 2
         'seq_len': 4,
         'dropout': dropout
     }
@@ -194,16 +215,12 @@ def run_single_experiment(p, op, train_fraction, depth, dim, heads, dropout, lr,
     return max_val_acc, trainer
 
 
-# ==============================================================================
-# MXmain.py 的主执行逻辑
-# ==============================================================================
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(add_help=True, description="Run multiple grokking experiments.")
     # data args
     parser.add_argument('--p', type=int, default=97, help='prime number')
-    parser.add_argument('--op', type=str, default='/',
-                        help='operation', choices=['*', '/', '+', '-'])
+    parser.add_argument('--op', type=str, default='x^3+xy^2+y',
+                        help='operation', choices=['*', '/', '+', '-', 'x^3+xy^2+y'])
     # model args
     parser.add_argument('--depth', type=int, default=2, help='depth')
     parser.add_argument('--dim', type=int, default=128, help='dimension')
@@ -220,7 +237,7 @@ if __name__ == '__main__':
     parser.add_argument('-b', '--batch_size', type=int,
                         default=512, help='batch size')
     parser.add_argument('-e', '--epochs', type=int,
-                        default=300, help='number of epochs')
+                        default=1000, help='number of epochs')
     # misc args
     parser.add_argument('--seed', type=int, default=42, help='random seed')
     parser.add_argument('--cpu', action='store_true', help='use cpu only')
@@ -229,15 +246,15 @@ if __name__ == '__main__':
 
     os.makedirs('media', exist_ok=True)
 
-    print("Running multiple experiments for different train fractions (MXmain.py)...")
+    print("Running multiple experiments for different train fractions...")
+    
 
-    # 生成10个从0.1到1.0均匀分布的train_fraction值
-    train_fractions_to_test = np.linspace(0.1, 1.0, 10)
+    # Generate 10 train_fraction values from 0.1 to 0.8 (avoid exact 1.0 to ensure some test data)
+    train_fractions_to_test = np.linspace(0.1, 0.95, 10)
     accuracies = []
 
-    # 循环遍历不同的train_fraction值
+    # Loop through different train_fraction values
     for tf in tqdm(train_fractions_to_test, desc="Varying Train Fraction"):
-        # 调用复制过来的 run_single_experiment 函数
         current_max_val_acc, _ = run_single_experiment(
             p=args.p, op=args.op, train_fraction=tf,
             depth=args.depth, dim=args.dim, heads=args.heads, dropout=args.dropout,
@@ -247,13 +264,13 @@ if __name__ == '__main__':
         )
         accuracies.append(current_max_val_acc)
 
-    # 绘制结果图 (train fraction vs accuracy)
+    # Plot results (train fraction vs accuracy)
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    # 绘制散点，带透明度
-    ax.plot(train_fractions_to_test, np.array(accuracies) * 100, 'o', alpha=0.6, label='Best Accuracy')
+    # Plot points with transparency
+    ax.plot(train_fractions_to_test, np.array(accuracies) * 100, 'o', alpha=0.6, label='Best Validation Accuracy')
 
-    # 连接散点的虚线
+    # Connect points with dashed line
     ax.plot(train_fractions_to_test, np.array(accuracies) * 100, linestyle='--', color='blue', alpha=0.5)
 
     ax.set_xlabel('Training Data Fraction')
@@ -264,8 +281,13 @@ if __name__ == '__main__':
     ax.set_xlim(min(train_fractions_to_test) - 0.02, max(train_fractions_to_test) + 0.02)
     ax.legend()
     fig.tight_layout()
-    plot_filename = f'media/accuracy_vs_train_fraction_{args.op}_{args.p}_10points.png'
+    plot_filename = "1"
     fig.savefig(plot_filename, dpi=300)
     plt.show()
 
     print(f"\nPlot '{plot_filename}' saved to 'media/' directory.")
+    
+    # Print summary
+    print(f"\nSummary of results:")
+    for i, (tf, acc) in enumerate(zip(train_fractions_to_test, accuracies)):
+        print(f"  Train fraction {tf:.2f}: {acc*100:.2f}% accuracy")
