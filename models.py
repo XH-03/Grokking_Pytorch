@@ -30,9 +30,10 @@ class AttentionTorch(nn.Module):
         else:
             self.to_out = nn.Identity()
 
-
+#   maskattention
     def forward(self, x, mask=None):
-#
+
+#   attention
     #def forward(self, x):
         # x: (b, n, d)
         b, n, d = x.shape
@@ -50,10 +51,12 @@ class AttentionTorch(nn.Module):
 
         scores = torch.einsum('bhqd,bhkd->bhqk', q, k) * self.scale
 
+#   maskattention
         if mask is not None:
             scores = scores + mask  # broadcast
-
+#   attention
         attn = torch.softmax(scores, dim=-1)
+
         out = torch.einsum('bhqk,bhkd->bhqd', attn, v)
 
         # (b, heads, n, dim_head) -> (b, n, heads*dim_head)
@@ -88,28 +91,27 @@ class BlockTorch(nn.Module):
         self.attn = AttentionTorch(dim, heads, dim_head, dropout)
         self.ff = FeedForwardTorch(dim, mlp_dim, dropout)
         # Build a causal mask if needed
-#
-        #self.register_buffer("_mask", self._causal_mask(seq_len), persistent=False)
+#   maskattention
+        self.register_buffer("_mask", self._causal_mask(seq_len), persistent=False)
 
-##
-    ## Create a causal mask for the attention mechanism
-    # def _causal_mask(self, n):
-    #     # shape: (1, 1, n, n) for broadcasting in multi-head attention
-    #     # or simply (1, n, n). We'll do (1, n, n):
-    #     mask = torch.triu(torch.full((n, n), float('-inf')), diagonal=1)
-    #     return mask
+#   Create a causal mask for the attention mechanism
+#   maskattention
+    def _causal_mask(self, n):
+        # shape: (1, 1, n, n) for broadcasting in multi-head attention
+        # or simply (1, n, n). We'll do (1, n, n):
+        mask = torch.triu(torch.full((n, n), float('-inf')), diagonal=1)
+        return mask
 
     def forward(self, x):
         # x: (b, n, d)
-        b, n, d = x.shape
+        # b, n, d = x.shape
         # Expand mask to (b, 1, n, n) if needed:
 
-#
-        #mask = self._mask.unsqueeze(0)  # (1, n, n)
-        # attn
-        x = x + self.attn(x)
-#
-        #x = x + self.attn(x, mask=mask)
+#   attention mask
+        mask = self._mask.unsqueeze(0)  # (1, n, n)
+        x = x + self.attn(x, mask=mask)
+#   attn
+        # x = x + self.attn(x)
         x = x + self.ff(x)
         return x
 
