@@ -10,7 +10,6 @@ from scipy.ndimage import gaussian_filter1d
 warnings.filterwarnings("ignore", message=".*Detected no triton.*", category=UserWarning)
 
 from tqdm import tqdm
-from functools import partial
 
 import torch
 import torch.nn as nn
@@ -52,9 +51,6 @@ parser.add_argument('--cpu', action='store_true', help='use cpu only')
 
 
 class TorchTrainer:
-    """
-    A parallel trainer that replicates the MLX training flow using PyTorch.
-    """
 
     def __init__(self,
                  model: nn.Module,
@@ -242,6 +238,7 @@ def main(args):
 
     ax.set_xlabel('Epoch')
     ax.set_ylabel('Accuracy (%)')
+    #plt.title("Encoder_Opration -")
     ax.legend()
     fig.tight_layout()
     fig.savefig('media/grokking.png', dpi=300)
